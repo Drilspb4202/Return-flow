@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Система управления посылками</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            background: linear-gradient(to right, #1f0036, #0d001a);
+            color: #fff;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: background 0.5s ease;
+        }
+        .container {
+            background-color: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            max-width: 600px;
+            width: 100%;
+            margin: 0 auto;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        input[type="text"], button, input[type="file"] {
+            width: 100%;
+            padding: 12px 20px;
+            margin-bottom: 12px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+            font-size: 18px;
+            background-color: rgba(50, 50, 50, 0.7);
+            color: #fff;
+            transition: background-color 0.3s ease, transform 0.3s ease;
+        }
+        button {
+            background-color: #a94fd3;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: background-color 0.3s ease, transform 0.3s ease;
+        }
+        button:hover {
+            background-color: #8000ff;
+            transform: scale(1.05);
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            color: #fff;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            text-align: left;
+            padding: 8px;
+            transition: background-color 0.3s ease;
+        }
+        th {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        #scanResults td {
+            background-color: rgba(255, 204, 204, 0.3);
+        }
+        #cellDisplay {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #76b852;
+            color: black;
+            border-radius: 10px;
+            display: inline-block;
+            font-weight: bold;
+            font-size: 32px;
+            text-align: center;
+            width: 80%;
+        }
+        .hidden {
+            display: none;
+        }
+        footer {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        #fileInputContainer {
+            position: relative;
+        }
+        #merchFile {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .counter {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            input[type="text"], button, input[type="file"] {
+                font-size: 16px;
+                padding: 10px;
+            }
+            .counter {
+                font-size: 18px;
+            }
+            #cellDisplay {
+                font-size: 28px;
+                width: 90%;
+            }
+            table th, table td {
+                padding: 6px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Система управления посылками</h2>
+        <div class="counter" id="scanCounter">Загруженные посылки: 0/0</div>
+        <input type="text" id="packageBarcode" placeholder="Сканируйте штрих-код посылки" autofocus>
+        <div id="cellDisplay"></div>
+        <button id="toggleButtons"><i class="fas fa-bars"></i> Показать действия</button>
+        <div id="buttonContainer" class="hidden">
+            <div id="fileInputContainer">
+                <button id="triggerFileInput"><i class="fas fa-upload"></i> Выбрать файл и загрузить данные</button>
+                <input type="file" id="merchFile" accept=".txt">
+            </div>
+            <button id="clearMerchData"><i class="fas fa-trash-alt"></i> Очистить данные мерчей и ячеек</button>
+            <button id="toggleScanMode" class="mode-indicator"><i class="fas fa-exchange-alt"></i> Переключить режим сканирования</button>
+            <button id="exportToExcel"><i class="fas fa-file-excel"></i> Экспортировать в Excel</button>
+        </div>
+        <button id="toggleScanHistory"><i class="fas fa-history"></i> Показать/Скрыть историю сканирования</button>
+        <div id="scanResults" class="hidden"></div>
+    </div>
+    <footer>
+        © 2024 SberLogistics. Все права защищены. Проект W7. Разработчик: Текучев.М.Ю
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.5/xlsx.full.min.js"></script>
+    <script>
+        let merchToCellMap = new Map();
+        let scanHistory = JSON.parse(localStorage.getItem('scanHistory')) || {};
+        let currentScanMode = 1;
+        let totalPackages = 0;
+        let scannedPackages = new Set(JSON.parse(localStorage.getItem('scannedPackages')) || []);
+
+        function processFileContent(fileContent) {
+            const lines = fileContent.split('\n');
+            merchToCellMap.clear();
+            lines.forEach(line => {
+                const parts = line.trim().split(/\s+/);
+                const merchId = parts[0].toLowerCase();
+                const cell = parts[1];
+                if (merchId && cell) {
+                    merchToCellMap.set(merchId, cell);
+                }
+            });
+            totalPackages = merchToCellMap.size;
+            console.log("Загруженные данные:", Array.from(merchToCellMap.entries()));
+            speak('Данные о мерчах и ячейках успешно загружены.');
+            updateScanCounter();
+        }
+
+        document.getElementById('clearMerchData').addEventListener('click', function() {
+            checkPasswordAndExecute(function() {
+                localStorage.removeItem('fileContent');
+                merchToCellMap.clear();
+                localStorage.removeItem('scanHistory');
+                scanHistory = {};
+                totalPackages = 0;
+                scannedPackages.clear();
+                localStorage.removeItem('scannedPackages');
+                updateScanHistoryDisplay();
+                updateScanCounter();
+                speak('Данные о мерчах и ячейках и история сканирования успешно очищены.');
+            });
+        });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileContent = localStorage.getItem('fileContent');
+            if (fileContent) {
+                processFileContent(fileContent);
+            }
+            updateScanHistoryDisplay();
+            updateScanCounter();
+        });
+
+        document.getElementById('triggerFileInput').addEventListener('click', function() {
+            document.getElementById('merchFile').click();
+        });
+
+        document.getElementById('merchFile').addEventListener('change', function() {
+            const fileInput = document.getElementById('merchFile');
+            if (fileInput.files.length === 0) {
+                speak('Пожалуйста, выберите файл.');
+                return;
+            }
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const fileContent = e.target.result;
+                localStorage.setItem('fileContent', fileContent);
+                processFileContent(fileContent);
+            };
+            reader.readAsText(file);
+        });
+
+        document.getElementById('packageBarcode').addEventListener('input', function() {
+            const barcode = this.value.trim().toLowerCase();
+            if (!barcode) return;
+
+            const cellDisplay = document.getElementById('cellDisplay');
+
+            if (!merchToCellMap.has(barcode)) {
+                this.value = '';
+                cellDisplay.textContent = 'Штрих-код не найден';
+                cellDisplay.style.backgroundColor = '#f44336';
+                speak('Штрих-код не найден.');
+                return;
+            }
+
+            const cell = merchToCellMap.get(barcode);
+            let historyEntry = scanHistory[barcode] || { firstScan: false, secondScan: false, cell: cell };
+            if (currentScanMode === 1) {
+                historyEntry.firstScan = true;
+            } else if (currentScanMode === 2) {
+                historyEntry.secondScan = true;
+            }
+            scanHistory[barcode] = historyEntry;
+            localStorage.setItem('scanHistory', JSON.stringify(scanHistory));
+            this.value = '';
+            cellDisplay.textContent = `Ячейка: ${cell}`;
+            cellDisplay.style.backgroundColor = '#76b852';
+            scannedPackages.add(barcode);
+            localStorage.setItem('scannedPackages', JSON.stringify([...scannedPackages]));
+            updateScanHistoryDisplay();
+            updateScanCounter();
+            speak(`${cell}`);
+        });
+
+        document.getElementById('toggleScanMode').addEventListener('click', function() {
+            checkPasswordAndExecute(function() {
+                currentScanMode = currentScanMode === 1 ? 2 : 1;
+                const modeText = currentScanMode === 1 ? "Первый" : "Второй";
+                document.getElementById('toggleScanMode').textContent = `Переключить режим сканирования (${modeText})`;
+                updateModeIndicator(currentScanMode);
+                updateScanHistoryDisplay();
+            });
+        });
+
+        document.getElementById('exportToExcel').addEventListener('click', function() {
+            checkPasswordAndExecute(function() {
+                const wb = XLSX.utils.book_new();
+                const wsData = [["Первое сканирование", "Второе сканирование"]];
+
+                Object.entries(scanHistory).forEach(([barcode, data]) => {
+                    const row = [
+                        data.firstScan ? barcode : "",
+                        data.secondScan ? barcode : ""
+                    ];
+                    wsData.push(row);
+                });
+
+                const ws = XLSX.utils.aoa_to_sheet(wsData);
+                XLSX.utils.book_append_sheet(wb, ws, "Сканирование");
+                XLSX.writeFile(wb, "scan_history.xlsx");
+            });
+        });
+
+        document.getElementById('toggleButtons').addEventListener('click', function() {
+            const buttonContainer = document.getElementById('buttonContainer');
+            buttonContainer.classList.toggle('hidden');
+            const toggleButtonText = buttonContainer.classList.contains('hidden') ? '<i class="fas fa-bars"></i> Показать действия' : '<i class="fas fa-bars"></i> Скрыть действия';
+            document.getElementById('toggleButtons').innerHTML = toggleButtonText;
+        });
+
+        document.getElementById('toggleScanHistory').addEventListener('click', function() {
+            const scanResults = document.getElementById('scanResults');
+            scanResults.classList.toggle('hidden');
+        });
+
+        function updateScanHistoryDisplay() {
+            const scanResultsElement = document.getElementById('scanResults');
+            scanResultsElement.innerHTML = '';
+            const table = document.createElement('table');
+            let firstScanCount = 0, secondScanCount = 0;
+            table.innerHTML = `
+                <tr>
+                    <th>Штрих-код</th>
+                    <th>Ячейка</th>
+                    <th>Первое сканирование</th>
+                    <th>Второе сканирование</th>
+                </tr>
+            `;
+            const rows = [];
+            Object.entries(scanHistory).forEach(([barcode, data]) => {
+                const row = `
+                    <tr>
+                        <td>${barcode}</td>
+                        <td>${data.cell}</td>
+                        <td>${data.firstScan ? "Да" : "Нет"}</td>
+                        <td>${data.secondScan ? "Да" : "Нет"}</td>
+                    </tr>
+                `;
+                rows.unshift(row);
+                if (data.firstScan) firstScanCount++;
+                if (data.secondScan) secondScanCount++;
+            });
+            table.innerHTML += rows.join('');
+            scanResultsElement.appendChild(table);
+            table.querySelector('th:nth-child(3)').textContent += ` (${firstScanCount})`;
+            table.querySelector('th:nth-child(4)').textContent += ` (${secondScanCount})`;
+            document.getElementById('exportToExcel').innerHTML = `<i class="fas fa-file-excel"></i> Экспортировать в Excel (Первое сканирование: ${firstScanCount})`;
+        }
+
+        function updateScanCounter() {
+            document.getElementById('scanCounter').textContent = `Загруженные посылки: ${scannedPackages.size}/${totalPackages}`;
+        }
+
+        function updateModeIndicator(mode) {
+            const button = document.getElementById('toggleScanMode');
+            button.classList.remove('mode-1', 'mode-2');
+            button.classList.add(`mode-${mode}`);
+        }
+
+        function speak(message) {
+            console.log('Попытка произнести сообщение:', message);
+            if ('speechSynthesis' in window) {
+                const speech = new SpeechSynthesisUtterance(message);
+                speech.lang = 'ru-RU';
+                speech.rate = 1.5;
+                speech.volume = 1.0;
+                window.speechSynthesis.speak(speech);
+            } else {
+                console.log('Ваш браузер не поддерживает синтез речи.');
+            }
+        }
+
+        function checkPasswordAndExecute(action) {
+            const password = prompt('Введите пароль:');
+            if (password === '0000') {
+                action();
+            } else {
+                alert('Неверный пароль!');
+            }
+        }
+
+        updateModeIndicator(currentScanMode);
+        updateScanHistoryDisplay();
+    </script>
+</body>
+</html>
